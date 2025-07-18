@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +18,6 @@ import (
 	"github.com/canonical/lxd/shared/revert"
 	"github.com/canonical/lxd/shared/validate"
 	cephTypes "github.com/canonical/microceph/microceph/api/types"
-	cephClient "github.com/canonical/microceph/microceph/client"
-	"github.com/canonical/microcluster/v2/client"
-	ovnClient "github.com/canonical/microovn/microovn/client"
 	"github.com/spf13/cobra"
 
 	"github.com/canonical/microcloud/microcloud/api"
@@ -123,6 +121,7 @@ type cmdInit struct {
 	flagSessionTimeout int64
 }
 
+// Command returns the subcommand for initializing a MicroCloud.
 func (c *cmdInit) Command() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "init",
@@ -136,6 +135,7 @@ func (c *cmdInit) Command() *cobra.Command {
 	return cmd
 }
 
+// Run runs the subcommand for initializing a MicroCloud.
 func (c *cmdInit) Run(cmd *cobra.Command, args []string) error {
 	if len(args) != 0 {
 		return cmd.Help()
@@ -158,6 +158,7 @@ func (c *cmdInit) Run(cmd *cobra.Command, args []string) error {
 	return cfg.RunInteractive(cmd, args)
 }
 
+// RunInteractive runs the interactive subcommand for initializing a MicroCloud.
 func (c *initConfig) RunInteractive(cmd *cobra.Command, args []string) error {
 	fmt.Println("Waiting for services to start ...")
 	err := checkInitialized(c.common.FlagMicroCloudDir, false, false)
@@ -666,6 +667,12 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 		}
 	}
 
+	for _, pool := range system.StoragePools {
+		if pool.Driver == "ceph" || profile.Devices["root"] == nil {
+			profile.Devices["root"] = map[string]string{"path": "/", "pool": pool.Name, "type": "disk"}
+		}
+	}
+
 	newProfile, err := c.askUpdateProfile(profile, profiles, lxdClient)
 	if err != nil {
 		return err
@@ -766,17 +773,9 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 				continue
 			}
 
-			var client *client.Client
 			for _, disk := range c.systems[name].MicroCephDisks {
-				if client == nil {
-					client, err = s.Services[types.MicroCeph].(*service.CephService).Client(name)
-					if err != nil {
-						return err
-					}
-				}
-
 				logger.Debug("Adding disk to MicroCeph", logger.Ctx{"name": name, "disk": disk.Path})
-				resp, err := cephClient.AddDisk(context.Background(), client, &disk)
+				resp, err := s.Services[types.MicroCeph].(*service.CephService).AddDisk(context.Background(), disk, name)
 				if err != nil {
 					return err
 				}
@@ -799,12 +798,9 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 			}
 		}
 
-		c, err := s.Services[types.MicroCeph].(*service.CephService).Client(s.Name)
-		if err != nil {
-			return err
-		}
+		cephService := s.Services[types.MicroCeph].(*service.CephService)
 
-		allDisks, err := cephClient.GetDisks(context.Background(), c)
+		allDisks, err := cephService.GetDisks(context.Background(), "", nil)
 		if err != nil {
 			return err
 		}
@@ -815,7 +811,7 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 				defaultPoolSize = RecommendedOSDHosts
 			}
 
-			pools, err := cephClient.GetPools(context.Background(), c)
+			pools, err := cephService.GetPools(context.Background(), s.Name)
 			if err != nil {
 				return err
 			}
@@ -840,7 +836,7 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 				poolsToUpdate = append(poolsToUpdate, "")
 			}
 
-			err = cephClient.PoolSetReplicationFactor(context.Background(), c, &cephTypes.PoolPut{Pools: poolsToUpdate, Size: int64(defaultPoolSize)})
+			err = cephService.PoolSetReplicationFactor(context.Background(), cephTypes.PoolPut{Pools: poolsToUpdate, Size: int64(defaultPoolSize)}, s.Name)
 			if err != nil {
 				return err
 			}
@@ -851,13 +847,9 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 
 	var ovnConfig string
 	if s.Services[types.MicroOVN] != nil {
-		ovn := s.Services[types.MicroOVN].(*service.OVNService)
-		client, err := ovn.Client()
-		if err != nil {
-			return err
-		}
+		serviceOVN := s.Services[types.MicroOVN].(*service.OVNService)
 
-		services, err := ovnClient.GetServices(context.Background(), client)
+		services, err := serviceOVN.GetServices(context.Background())
 		if err != nil {
 			return err
 		}
@@ -875,7 +867,7 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 					addr = clusterMap[service.Location]
 				}
 
-				conns = append(conns, fmt.Sprintf("ssl:%s", util.CanonicalNetworkAddress(addr, 6641)))
+				conns = append(conns, "ssl:"+util.CanonicalNetworkAddress(addr, 6641))
 			}
 		}
 
@@ -954,10 +946,6 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 
 	cephFSPool := lxdAPI.StoragePoolsPost{}
 	for _, pool := range system.StoragePools {
-		if pool.Driver == "ceph" || profile.Devices["root"] == nil {
-			profile.Devices["root"] = map[string]string{"path": "/", "pool": pool.Name, "type": "disk"}
-		}
-
 		// Ensure the cephfs pool is created after the ceph pool so we set up crush rules.
 		if pool.Driver == "cephfs" {
 			cephFSPool = pool
@@ -984,7 +972,7 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 		}
 	}
 
-	if !shared.ValueInSlice(profile.Name, profiles) {
+	if !slices.Contains(profiles, profile.Name) {
 		err = lxdClient.CreateProfile(profile)
 		if err != nil {
 			return err
@@ -1004,16 +992,19 @@ func (c *initConfig) setupCluster(s *service.Handler) error {
 		}
 
 		poolNames := []string{}
-		if len(system.TargetStoragePools) > 0 {
-			for _, pool := range system.TargetStoragePools {
-				poolNames = append(poolNames, pool.Name)
-			}
-		} else {
-			for _, cfg := range system.JoinConfig {
-				if cfg.Name == "local" || cfg.Name == "remote" {
-					if cfg.Entity == "storage-pool" && cfg.Key == "source" {
-						poolNames = append(poolNames, cfg.Name)
-					}
+
+		// In case any storage pools are marked for initial setup,
+		// add them to the list of available storage pool names.
+		for _, pool := range system.TargetStoragePools {
+			poolNames = append(poolNames, pool.Name)
+		}
+
+		// When joining the selected system, it can grow either the local or remote storage pool.
+		// In this case add the pool's name to the list of available storage pools.
+		for _, cfg := range system.JoinConfig {
+			if cfg.Name == "local" || cfg.Name == "remote" {
+				if cfg.Entity == "storage-pool" && cfg.Key == "source" {
+					poolNames = append(poolNames, cfg.Name)
 				}
 			}
 		}

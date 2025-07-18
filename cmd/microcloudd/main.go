@@ -20,6 +20,7 @@ import (
 
 	"github.com/canonical/microcloud/microcloud/api"
 	"github.com/canonical/microcloud/microcloud/api/types"
+	"github.com/canonical/microcloud/microcloud/database"
 	"github.com/canonical/microcloud/microcloud/service"
 	"github.com/canonical/microcloud/microcloud/version"
 )
@@ -35,7 +36,7 @@ var Debug bool
 var Verbose bool
 
 type cmdGlobal struct {
-	cmd *cobra.Command //nolint:structcheck,unused // FIXME: Remove the nolint flag when this is in use.
+	cmd *cobra.Command //nolint:unused // FIXME: Remove the nolint flag when this is in use.
 
 	flagHelp    bool
 	flagVersion bool
@@ -51,6 +52,7 @@ type cmdDaemon struct {
 	flagHeartbeatInterval time.Duration
 }
 
+// Command returns the main microcloudd command.
 func (c *cmdDaemon) Command() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "microcloudd",
@@ -63,6 +65,7 @@ func (c *cmdDaemon) Command() *cobra.Command {
 	return cmd
 }
 
+// Run runs the main microcloudd command.
 func (c *cmdDaemon) Run(cmd *cobra.Command, args []string) error {
 	if len(args) != 0 {
 		return cmd.Help()
@@ -131,6 +134,8 @@ func (c *cmdDaemon) Run(cmd *cobra.Command, args []string) error {
 		api.SessionInitiatingCmd(s),
 		api.SessionJoiningCmd(s),
 		api.SessionStopCmd(s),
+		api.ClusterManagersCmd(s),
+		api.ClusterManagersJoinCmd(s),
 		api.LXDProxy(s),
 		api.CephProxy(s),
 		api.OVNProxy(s),
@@ -155,6 +160,8 @@ func (c *cmdDaemon) Run(cmd *cobra.Command, args []string) error {
 		Version:           version.RawVersion,
 		HeartbeatInterval: c.flagHeartbeatInterval,
 
+		ExtensionsSchema: database.SchemaExtensions,
+
 		PreInitListenAddress: "[::]:" + strconv.FormatInt(service.CloudPort, 10),
 		Hooks: &state.Hooks{
 			PostBootstrap: func(ctx context.Context, state state.State, initConfig map[string]string) error {
@@ -173,6 +180,8 @@ func (c *cmdDaemon) Run(cmd *cobra.Command, args []string) error {
 				return setHandlerAddress(state.Address().URL.Host)
 			},
 			OnStart: func(ctx context.Context, state state.State) error {
+				SendClusterManagerStatusMessageTask(ctx, s, state)
+
 				// If we are already initialized, there's nothing to do.
 				err := state.Database().IsOpen(ctx)
 				// If we encounter a non-503 error, that means the database failed for some reason.

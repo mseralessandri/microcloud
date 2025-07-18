@@ -13,8 +13,8 @@ env:
   CGO_LDFLAGS: -L/home/runner/go/deps/dqlite/.libs/
   LD_LIBRARY_PATH: /home/runner/go/deps/dqlite/.libs/
   CGO_LDFLAGS_ALLOW: (-Wl,-wrap,pthread_create)|(-Wl,-z,now)
-  # Use a directory path for the cover files present on every system regardless of the used runner.
-  GOCOVERDIR: ${{ ( github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ) && '/tmp/cover' || '' }}
+  # Use the github.workspace variable to adapt the cover directory path based on the used runner.
+  GOCOVERDIR: ${{ ( github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ) && format('{0}/cover', github.workspace) || '' }}
 
 permissions:
   contents: read
@@ -32,22 +32,20 @@ defaults:
 jobs:
   changes:
     name: Changes
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     outputs:
-      except_docs: ${{ steps.filter.outputs.except_docs }}
+      except_docs: ${{ steps.check.outputs.changes }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
 
       - name: Check for changes
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
-        id: filter
+        uses: ./.github/actions/check-changes
+        id: check
         with:
-          filters: |
-            except_docs:
-              # Match all changes except 'doc/**'.
-              # If no files outside of 'doc/**' are changed except_docs is set to 'false'.
-              - '!(doc/**)'
+          glob: ":!doc/*"
 
   code-tests:
     name: Code
@@ -61,8 +59,11 @@ jobs:
           # A non-shallow clone is needed for the Differential ShellCheck
           fetch-depth: 0
 
+      - name: Require GHA pinning
+        uses: canonical/lxd/.github/actions/require-gha-pinning@main
+
       - name: Install Go
-        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version-file: 'go.mod'
 
@@ -73,33 +74,36 @@ jobs:
           go mod tidy -go="${GOMIN}"
 
       - name: Dependency Review
-        uses: actions/dependency-review-action@3b139cfc5fae8b618d3eae3675e383bb1769c019 # v4.5.0
+        uses: actions/dependency-review-action@da24556b548a50705dd671f47852072ea4c105d9 # v4.7.1
         if: github.event_name == 'pull_request'
 
       - id: ShellCheck
         name: Differential ShellCheck
-        uses: redhat-plumbers-in-action/differential-shellcheck@cc6721c45a8800cc666de45493545a07a638d121 # v5.4.0
+        uses: redhat-plumbers-in-action/differential-shellcheck@929381c602ed76daa9b523e001ee29b82bd6d8e9 # v5.5.4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           strict-check-on-push: true
         if: github.event_name == 'pull_request'
 
       - name: Upload artifact with ShellCheck defects in SARIF format
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Differential ShellCheck SARIF
           path: ${{ steps.ShellCheck.outputs.sarif }}
         if: github.event_name == 'pull_request'
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y pkg-config autoconf automake libtool make libuv1-dev libsqlite3-dev liblz4-dev
+      - name: Install MicroCloud build dependencies
+        uses: ./.github/actions/install-builddeps
 
       - name: Build
         run: |
           make deps
           make build-test
+
+          # Include dqlite libs in dependencies for system tests.
+          mkdir /home/runner/go/bin/dqlite
+          cp -r ~/go/deps/dqlite/include /home/runner/go/bin/dqlite/include
+          cp -r ~/go/deps/dqlite/.libs /home/runner/go/bin/dqlite/libs
 
       - name: Run static analysis
         run: make check-static
@@ -114,14 +118,14 @@ jobs:
           make check-unit
 
       - name: Upload coverage data
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-unit
           path: ${{env.GOCOVERDIR}}
         if: env.GOCOVERDIR != ''
 
       - name: Upload system test dependencies
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: system-test-deps
           path: |
@@ -145,27 +149,37 @@ jobs:
         # Define this first in the matrix so that it's readable
         # after GitHub as formed the name for the respective check.
         suite:
-          - "add"
+          - "add_interactive"
+          - "add_services"
+          - "cluster_manager"
+          - "e2e"
           - "instances"
-          - "basic"
-          - "recover"
           - "interactive"
+          - "interactive_combinations"
           - "mismatch"
+          - "non_ha"
           - "preseed"
+          - "recover"
+          - "remove_cluster"
+          - "reuse_cluster"
         # Set of versions to use for the matrix tests.
         os: ["24.04"]
         microceph: ["latest/edge"]
         microovn: ["latest/edge"]
-        lxd: ["5.21/edge"]
+        lxd:
+          # Both LXD 5.21 and 6 are supported.
+          - "5.21/edge"
+          - "6/edge"
         microcloud: ["latest/edge"]
+        exclude:
+          # Exclude LXD 6 for regular development pipelines to speed up the result cycle.
+          - lxd: ${{ github.event_name != 'schedule' && '6/edge' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: System test
         uses: ./.github/actions/system-test
-        with:
-          github_runner: true
 
   system-tests-upgrade:
     env:
@@ -194,8 +208,6 @@ jobs:
 
       - name: System test
         uses: ./.github/actions/system-test
-        with:
-          github_runner: true
 
   system-tests-canonical:
     env:
@@ -224,25 +236,28 @@ jobs:
 
       - name: System test
         uses: ./.github/actions/system-test
-        with:
-          github_runner: false
 
   tics:
     name: Tiobe TICS
     runs-on: ubuntu-22.04
     needs: [system-tests-core, system-tests-upgrade]
+    env:
+      CGO_CFLAGS: "-I/home/runner/go/bin/dqlite/include/"
+      CGO_LDFLAGS: "-L/home/runner/go/bin/dqlite/libs/"
+      LD_LIBRARY_PATH: "/home/runner/go/bin/dqlite/libs/"
+      CGO_LDFLAGS_ALLOW: "(-Wl,-wrap,pthread_create)|(-Wl,-z,now)"
     if: ${{ ( github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ) && github.ref_name == 'main' && github.repository == 'canonical/microcloud' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Go
-        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: 1.23.x
 
       - name: Download coverage data
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: coverage-*
           path: ${{env.GOCOVERDIR}}
@@ -255,11 +270,14 @@ jobs:
           ls -la ${{ env.GOCOVERDIR }}
 
       - name: Download system test dependencies
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: system-test-deps
           merge-multiple: true
           path: /home/runner/go/bin
+
+      - name: Install MicroCloud build dependencies
+        uses: ./.github/actions/install-builddeps
 
       - name: Install dependencies
         run: |
@@ -275,13 +293,13 @@ jobs:
           go tool covdata percent -i="${GOCOVERDIR}"
 
       - name: Run TICS
-        uses: tiobe/tics-github-action@88cb795a736d2ca885753bec6ed2c8b03e3f892f # v3.3.0
+        uses: tiobe/tics-github-action@009979693978bfefad2ad15c1020066694968dc7 # v3.4.0
         with:
           mode: qserver
           project: microcloud
-          viewerUrl: https://canonical.tiobe.com/tiobeweb/TICS/api/cfg?name=default
+          viewerUrl: https://canonical.tiobe.com/tiobeweb/TICS/api/cfg?name=GoProjects
           branchdir: ${{ github.workspace }}
-          ticsAuthToken: ${{ secrets.TICS_AUTH_TOKEN }}
+          ticsAuthToken: ${{ secrets.TICSAUTHTOKEN }}
           installTics: true
           calc: ALL
           tmpdir: /tmp/tics
@@ -295,7 +313,7 @@ jobs:
 
   snap:
     name: Trigger snap edge build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: [code-tests, system-tests-core, system-tests-upgrade, doc-tests]
     if: ${{ github.repository == 'canonical/microcloud' && github.event_name == 'push' && github.actor != 'dependabot[bot]' }}
     env:

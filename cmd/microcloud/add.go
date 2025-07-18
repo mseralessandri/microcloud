@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,6 +25,7 @@ type cmdAdd struct {
 	flagSessionTimeout int64
 }
 
+// Command returns the subcommand to add new systems to MicroCloud.
 func (c *cmdAdd) Command() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add",
@@ -36,6 +38,7 @@ func (c *cmdAdd) Command() *cobra.Command {
 	return cmd
 }
 
+// Run runs the subcommand to add new systems to MicroCloud.
 func (c *cmdAdd) Run(cmd *cobra.Command, args []string) error {
 	if len(args) != 0 {
 		return cmd.Help()
@@ -109,6 +112,11 @@ func (c *cmdAdd) Run(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// Exit early if no new systems got selected during the trust establishment session.
+	if len(cfg.systems) == 0 {
+		return errors.New("At least one new system has to be selected")
 	}
 
 	reverter := revert.New()

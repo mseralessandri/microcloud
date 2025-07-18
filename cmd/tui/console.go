@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -101,7 +102,7 @@ func (c *testConsole) parseInput(handler *InputHandler) error {
 	input := string(line)
 
 	// Log the input string.
-	_, err = c.out.WriteString(fmt.Sprintf(" ANSWER: {%s}\n", input))
+	_, err = fmt.Fprintf(c.out, " ANSWER: {%s}\n", input)
 	if err != nil {
 		return err
 	}
@@ -139,22 +140,22 @@ func (c *testConsole) parseInput(handler *InputHandler) error {
 
 			// If expecting 0, error out as the table will be invalid with 0 rows.
 			if count == 0 {
-				return fmt.Errorf("Cannot expect 0 rows")
+				return errors.New("Cannot expect 0 rows")
 			}
 
 			// Sanity check that the table didn't start with more rows than we are going to expect.
-			if len(handler.getAllRows()) > count {
-				return fmt.Errorf("Table has more rows (%d) than expected (%d)", len(handler.getAllRows()), count)
+			if handler.countAllRows() > count {
+				return fmt.Errorf("Table has more rows (%d) than expected (%d)", handler.countAllRows(), count)
 			}
 
 			// Wait until we receive the expected row count.
-			for len(handler.getAllRows()) < count {
+			for handler.countAllRows() < count {
 				time.Sleep(300 * time.Millisecond)
 			}
 		} else if filter != "" {
 			action = filter
 		} else {
-			action = input + "\r"
+			action = input + "\n"
 		}
 	}
 

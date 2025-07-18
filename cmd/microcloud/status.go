@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -91,6 +92,7 @@ type cmdStatus struct {
 	common *CmdControl
 }
 
+// Command returns the subcommand for the deployment status.
 func (c *cmdStatus) Command() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -101,6 +103,7 @@ func (c *cmdStatus) Command() *cobra.Command {
 	return cmd
 }
 
+// Run runs the subcommand for the deployment status.
 func (c *cmdStatus) Run(cmd *cobra.Command, args []string) error {
 	if len(args) != 0 {
 		return cmd.Help()
@@ -122,7 +125,7 @@ func (c *cmdStatus) Run(cmd *cobra.Command, args []string) error {
 	}
 
 	if !status.Ready {
-		return fmt.Errorf("MicroCloud is uninitialized, run 'microcloud init' first")
+		return errors.New("MicroCloud is uninitialized, run 'microcloud init' first")
 	}
 
 	cfg := initConfig{

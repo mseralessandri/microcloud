@@ -8,11 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/canonical/lxd/client"
 	"github.com/canonical/lxd/lxd/util"
-	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
 	"github.com/canonical/microcluster/v2/microcluster"
 	microTypes "github.com/canonical/microcluster/v2/rest/types"
@@ -141,7 +141,7 @@ func (s LXDService) Bootstrap(ctx context.Context) error {
 	}
 
 	if currentCluster.Enabled {
-		return fmt.Errorf("This LXD server is already clustered")
+		return errors.New("This LXD server is already clustered")
 	}
 
 	cluster := api.ClusterPut{
@@ -166,7 +166,7 @@ func (s LXDService) Bootstrap(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("Timed out waiting for LXD cluster to initialize")
+			return errors.New("Timed out waiting for LXD cluster to initialize")
 		default:
 			names, err := client.GetClusterMemberNames()
 			if err != nil {
@@ -189,7 +189,7 @@ func (s LXDService) Join(ctx context.Context, joinConfig JoinConfig) error {
 		return err
 	}
 
-	config.Cluster.MemberConfig = joinConfig.LXDConfig
+	config.MemberConfig = joinConfig.LXDConfig
 	client, err := s.Client(ctx)
 	if err != nil {
 		return err
@@ -513,7 +513,7 @@ func defaultNetworkInterfacesFilter(network api.Network, state *api.NetworkState
 // ovnNetworkInterfacesFilter filters a network based on OVN specific rules and returns whether it should be skipped.
 func ovnNetworkInterfacesFilter(network api.Network, state *api.NetworkState) bool {
 	// OpenVswitch only supports physical ethernet or VLAN interfaces, LXD also supports plugging in bridges.
-	if !shared.ValueInSlice(network.Type, []string{"physical", "bridge", "bond", "vlan"}) {
+	if !slices.Contains([]string{"physical", "bridge", "bond", "vlan"}, network.Type) {
 		return false
 	}
 
@@ -614,7 +614,7 @@ func (s *LXDService) ValidateCephInterfaces(cephNetworkSubnetStr string, peerInt
 
 	ones, bits := subnet.Mask.Size()
 	if bits-ones == 0 {
-		return nil, fmt.Errorf("Invalid Ceph network subnet (must have more than one address)")
+		return nil, errors.New("Invalid Ceph network subnet (must have more than one address)")
 	}
 
 	data := make(map[string][][]string)
@@ -643,7 +643,7 @@ func (s *LXDService) ValidateCephInterfaces(cephNetworkSubnetStr string, peerInt
 	}
 
 	if len(data) == 0 {
-		fmt.Println(tui.WarningColor("No network interfaces found with IPs in the specified subnet, skipping Ceph network setup", false))
+		tui.PrintWarning("No network interfaces found with IPs in the specified subnet. Skipping Ceph network setup")
 	}
 
 	return data, nil
@@ -771,7 +771,7 @@ func (s LXDService) defaultGatewaySubnetV4() (*net.IPNet, string, error) {
 	}
 
 	if !available {
-		return nil, "", fmt.Errorf("No default IPv4 gateway available")
+		return nil, "", errors.New("No default IPv4 gateway available")
 	}
 
 	iface, err := net.InterfaceByName(ifaceName)
@@ -797,14 +797,14 @@ func (s LXDService) defaultGatewaySubnetV4() (*net.IPNet, string, error) {
 		}
 
 		if subnet != nil {
-			return nil, "", fmt.Errorf("More than one IPv4 subnet on default interface")
+			return nil, "", errors.New("More than one IPv4 subnet on default interface")
 		}
 
 		subnet = addrNet
 	}
 
 	if subnet == nil {
-		return nil, "", fmt.Errorf("No IPv4 subnet on default interface")
+		return nil, "", errors.New("No IPv4 subnet on default interface")
 	}
 
 	return subnet, ifaceName, nil
@@ -823,8 +823,8 @@ func (s LXDService) SupportsFeature(ctx context.Context, feature string) (bool, 
 	}
 
 	if server.APIExtensions == nil {
-		return false, fmt.Errorf("API extensions not available when checking for a LXD feature")
+		return false, errors.New("API extensions not available when checking for a LXD feature")
 	}
 
-	return shared.ValueInSlice(feature, server.APIExtensions), nil
+	return slices.Contains(server.APIExtensions, feature), nil
 }

@@ -1,5 +1,6 @@
 import datetime
 import os
+import yaml
 
 # Custom configuration for the Sphinx documentation builder.
 # All configuration specific to your project should be done in this file.
@@ -50,7 +51,7 @@ copyright = '%s, %s' % (datetime.date.today().year, author)
 # don't know yet)
 # NOTE: If no ogp_* variable is defined (e.g. if you remove this section) the
 # sphinxext.opengraph extension will be disabled.
-ogp_site_url = 'https://canonical-microcloud.readthedocs-hosted.com/en/latest/'
+ogp_site_url = 'https://documentation.ubuntu.com/microcloud/latest'
 # The documentation website name (usually the same as the product name)
 ogp_site_name = project
 # The URL of an image or logo that is used in the preview
@@ -82,8 +83,8 @@ html_context = {
 
     # ru-fu: we're using different Discourses
     'discourse_prefix': {
+        'ubuntu': 'https://discourse.ubuntu.com/t/',
         'lxc': 'https://discuss.linuxcontainers.org/t/',
-        'ubuntu': 'https://discourse.ubuntu.com/t/'
     },
 
     # Change to the Mattermost channel you want to link to
@@ -122,7 +123,23 @@ html_context = {
 
 # If your project is on documentation.ubuntu.com, specify the project
 # slug (for example, "lxd") here.
-slug = ""
+slug = "microcloud"
+
+#######################
+# Sitemap configuration: https://sphinx-sitemap.readthedocs.io/
+#######################
+
+# Base URL of RTD hosted project
+
+html_baseurl = 'https://documentation.ubuntu.com/microcloud/'
+
+# Configures URL scheme for sphinx-sitemap to generate correct URLs
+# based on the version if built in RTD
+if 'READTHEDOCS_VERSION' in os.environ:
+    rtd_version = os.environ["READTHEDOCS_VERSION"]
+    sitemap_url_scheme = f'{rtd_version}/microcloud/{{link}}'
+else:
+    sitemap_url_scheme = '{link}'
 
 ############################################################
 ### Redirects
@@ -135,16 +152,23 @@ slug = ""
 # NOTE: If this variable is not defined, set to None, or the dictionary is empty,
 # the sphinx_reredirects extension will be disabled.
 redirects = {
-    'tutorial/index': 'get_started/'}
+    'tutorial/index': 'get_started/',
+    'explanation/initialisation': '../initialization',
+    'how-to/initialise': '../initialize'
+}
 
 ############################################################
-### Link checker exceptions
+### Link checker
 ############################################################
 
 # Links to ignore when checking links
 linkcheck_ignore = [
     'http://127.0.0.1:8000',
-    'http://localhost:8000'
+    'http://localhost:8000',
+    # These links may fail from time to time
+    'https://ceph.io',
+    # Cloudflare protection on SourceForge domains often block linkcheck
+    r"https://.*\.sourceforge\.net/.*",
     ]
 
 # Pages on which to ignore anchors
@@ -153,6 +177,19 @@ linkcheck_ignore = [
 custom_linkcheck_anchors_ignore_for_url = [
     r'https://snapcraft\.io/docs/.*'
     ]
+
+# Increase linkcheck rate limit timeout max, default when unset is 300
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#confval-linkcheck_timeout
+linkcheck_rate_limit_timeout = 600
+
+# Increase linkcheck retries, default when unset is 1
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#confval-linkcheck_retries
+linkcheck_retries = 3
+
+# Increase the duration, in seconds, that the linkcheck builder will wait for a response after each hyperlink request.
+# Default when unset is 30
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#confval-linkcheck_timeout
+linkcheck_timeout = 45
 
 ############################################################
 ### Additions to default configuration
@@ -177,6 +214,7 @@ custom_extensions = [
     'canonical.terminal-output',
     'notfound.extension',
     'sphinx.ext.intersphinx',
+    'sphinx_sitemap',
     ]
 
 # Add custom required Python modules that must be added to the
@@ -186,11 +224,15 @@ custom_extensions = [
 # pyspelling, sphinx, sphinx-autobuild, sphinx-copybutton, sphinx-design,
 # sphinx-notfound-page, sphinx-reredirects, sphinx-tabs, sphinxcontrib-jquery,
 # sphinxext-opengraph
-custom_required_modules = []
+custom_required_modules = [
+    'sphinx-sitemap',
+    'pyyaml',
+]
 
 # Add files or directories that should be excluded from processing.
 custom_excludes = [
-    "integration"
+    "integration",
+    'README.md'
     ]
 
 # Add CSS files (located in .sphinx/_static/)
@@ -226,16 +268,16 @@ custom_tags = []
 
 if ('SINGLE_BUILD' in os.environ and os.environ['SINGLE_BUILD'] == 'True'):
     intersphinx_mapping = {
-        'lxd': ('https://documentation.ubuntu.com/lxd/en/latest/', None),
+        'lxd': ('https://documentation.ubuntu.com/lxd/latest/', None),
         'microceph': ('https://canonical-microceph.readthedocs-hosted.com/en/latest/', None),
         'microovn': ('https://canonical-microovn.readthedocs-hosted.com/en/latest/', None),
         'ceph': ('https://docs.ceph.com/en/latest/', None),
     }
 elif ('READTHEDOCS' in os.environ) and (os.environ['READTHEDOCS'] == 'True'):
     intersphinx_mapping = {
-        'lxd': ('/en/latest/lxd/', os.environ['READTHEDOCS_OUTPUT'] + 'html/lxd/objects.inv'),
-        'microceph': ('/en/latest/microceph/', os.environ['READTHEDOCS_OUTPUT'] + 'html/microceph/objects.inv'),
-        'microovn': ('/en/latest/microovn/', os.environ['READTHEDOCS_OUTPUT'] + 'html/microovn/objects.inv'),
+        'lxd': (os.environ['PATH_PREFIX'] + 'lxd/', os.environ['READTHEDOCS_OUTPUT'] + 'html/lxd/objects.inv'),
+        'microceph': (os.environ['PATH_PREFIX'] + 'microceph/', os.environ['READTHEDOCS_OUTPUT'] + 'html/microceph/objects.inv'),
+        'microovn': (os.environ['PATH_PREFIX'] + 'microovn/', os.environ['READTHEDOCS_OUTPUT'] + 'html/microovn/objects.inv'),
         'ceph': ('https://docs.ceph.com/en/latest/', None)
     }
 else:
@@ -258,3 +300,8 @@ if not ('SINGLE_BUILD' in os.environ and os.environ['SINGLE_BUILD'] == 'True'):
     custom_templates_path = ['integration/microcloud/_templates']
     redirects['../index'] = 'microcloud/'
     custom_tags.append('integrated')
+
+# Load substitutions from YAML file
+if os.path.exists('./substitutions.yaml'):
+    with open('./substitutions.yaml', 'r') as fd:
+        myst_substitutions = yaml.safe_load(fd.read())

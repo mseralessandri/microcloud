@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -17,7 +18,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/canonical/microcloud/microcloud/api/types"
-	"github.com/canonical/microcloud/microcloud/client"
 	cloudClient "github.com/canonical/microcloud/microcloud/client"
 )
 
@@ -83,7 +83,7 @@ func (s CloudService) Bootstrap(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("Timed out waiting for MicroCloud cluster to initialize")
+			return errors.New("Timed out waiting for MicroCloud cluster to initialize")
 		default:
 			names, err := s.ClusterMembers(ctx)
 			if err != nil {
@@ -138,7 +138,7 @@ func (s CloudService) RemoteIssueToken(ctx context.Context, clusterAddress strin
 		return "", err
 	}
 
-	return client.RemoteIssueToken(ctx, c, serviceType, types.ServiceTokensPost{ClusterAddress: c.URL().URL.Host, JoinerName: peer})
+	return cloudClient.RemoteIssueToken(ctx, c, serviceType, types.ServiceTokensPost{ClusterAddress: c.URL().URL.Host, JoinerName: peer})
 }
 
 // Join joins a cluster with the given token.
@@ -190,7 +190,7 @@ func (s CloudService) RequestJoin(ctx context.Context, name string, cert *x509.C
 		}
 	}
 
-	return client.JoinServices(ctx, c, joinConfig)
+	return cloudClient.JoinServices(ctx, c, joinConfig)
 }
 
 // RequestJoinIntent send the intent to join the remote cluster.
@@ -205,7 +205,7 @@ func (s CloudService) RequestJoinIntent(ctx context.Context, clusterAddress stri
 		return nil, err
 	}
 
-	return client.JoinIntent(ctx, c, intent)
+	return cloudClient.JoinIntent(ctx, c, intent)
 }
 
 // RemoteClusterMembers returns a map of cluster member names and addresses from the MicroCloud at the given address.
@@ -372,7 +372,7 @@ func (s *CloudService) StartSession(ctx context.Context, role string, sessionTim
 		return nil, err
 	}
 
-	return client.StartSession(ctx, c, role, sessionTimeout)
+	return cloudClient.StartSession(ctx, c, role, sessionTimeout)
 }
 
 // RemoteClient returns a client targeting a remote MicroCloud.

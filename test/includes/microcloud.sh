@@ -207,7 +207,6 @@ join_session(){
     LOOKUP_IFACE="enp5s0"
   fi
 
-
   # Select the first usable address and enter the passphrase.
   setup="$([ -n "${LOOKUP_IFACE}" ] && printf "table:filter %s" "${LOOKUP_IFACE}")          # filter the lookup interface
 $([ -n "${LOOKUP_IFACE}" ] && printf "table:select")          # select the interface
@@ -222,31 +221,40 @@ $(true)                                 # workaround for set -e
     set -x
   fi
 
-
   # Spawn joiner child processes, and capture the exit code.
   for member in ${joiners}; do
-    lxc exec "${member}" -- sh -c "tee in | (microcloud join 2>&1 3>debug; echo \$? > code) | tee out" <<< "${setup}" &
+    tmux new-session -d -s "${member}" lxc exec "${member}" -- sh -c "tee in | (microcloud join 2>&1 3>debug; echo \$? > code) | tee out"
+
+    retries=0
+
+    # Wait until CLI is in testing mode.
+    while [[ ! "$(tmux capture-pane -t "${member}" -pS -)" =~ "MicroCloud CLI is in testing mode" ]]; do
+      if [ "${retries}" -gt 30 ]; then
+        echo "Failed waiting for test console on ${member} to become ready"
+        exit 1
+      fi
+
+      retries="$((retries+1))"
+      sleep 1
+    done
+
+    # Send the interactive test inputs, a newline and EOF.
+    tmux send-keys -t "${member}" "${setup}" Enter C-d
   done
 
   # Set up microcloud with the initiator.
   microcloud_interactive "${mode}" "${initiator}"
   code="$?"
 
-  # Kill the childs if they are still running.
-  child_processes="$(jobs -pr)"
-  if [ -n "${child_processes}" ]; then
-    for p in ${child_processes}; do
-      kill -9 "${p}"
-    done
-  fi
-
+  # Kill the tmux sessions if they are still running.
+  # The '#S' filter returns only the session's names.
+  # Suppress errors in case the list of sessions is empty.
+  for session in $(tmux list-sessions -F '#S' 2>/dev/null); do
+    tmux kill-session -t "${session}"
+  done
 
   for joiner in ${joiners} ; do
-    if [ "${code}" = 0 ]; then
-      [ "$(lxc exec "${joiner}" -- cat code)" = "0" ]
-    else
-      ! [ "$(lxc exec "${joiner}" -- cat code)" = "0" ] || false
-    fi
+    [ "$(lxc file pull "${joiner}"/root/code -)" = "${code}" ]
   done
 
   return "${code}"
@@ -572,6 +580,7 @@ validate_system_lxd() {
     ipv4_ranges=${8:-}
     ipv6_gateway=${9:-}
     dns_namesersers=${10:-}
+    profile_pool=${11:-}
 
     echo "==> ${name} Validating LXD with ${num_peers} peers"
     echo "    ${name} Local Disk: {${local_disk}}, Remote Disks: {${remote_disks}}, OVN Iface: {${ovn_interface}}"
@@ -622,18 +631,20 @@ validate_system_lxd() {
     fi
 
     echo "    ${name} Validating Profiles"
-    if [ "${has_microceph}" = 1 ] && [ "${remote_disks}" -gt 0 ] ; then
-       lxc profile device get default root pool | grep -q "remote"
+    if [ -n "${profile_pool}" ]; then
+      lxc profile device get default root pool | grep -q "${profile_pool}"
+    elif [ "${has_microceph}" = 1 ] && [ "${remote_disks}" -gt 0 ] ; then
+      lxc profile device get default root pool | grep -q "remote"
     elif [ -n "${local_disk}" ] ; then
-       lxc profile device get default root pool | grep -q "local"
+      lxc profile device get default root pool | grep -q "local"
     else
-       ! lxc profile device list default | grep -q "root" || false
+      ! lxc profile device list default | grep -q "root" || false
     fi
 
     if [ "${has_microovn}" = 1 ] && [ -n "${ovn_interface}" ] ; then
-       lxc profile device get default eth0 network | grep -q "default"
+      lxc profile device get default eth0 network | grep -q "default"
     else
-       lxc profile device get default eth0 network | grep -q "lxdfan0"
+      lxc profile device get default eth0 network | grep -q "lxdfan0"
     fi
 
     # Only check these if MicroCloud is at least > 2.1.0.
@@ -1277,11 +1288,17 @@ setup_system() {
       lxc exec "${name}" -- snap install microcloud --channel="${MICROCLOUD_SNAP_CHANNEL}" --cohort="+"
     fi
 
+    # Hold the snaps to not perform any refreshes during test execution.
+    # This can cause various side effects in case of restoring an old test deployment
+    # as the snaps will identify upstream changes and initiate a refresh.
+    # It was also observed in the test pipeline jobs from time to time.
+    lxc exec "${name}" -- snap refresh --hold microceph microovn lxd microcloud
+
     set_debug_binaries "${name}"
   )
 
   # let boot/cloud-init finish its job
-  lxc exec "${name}" -- systemctl is-system-running --wait || lxc exec "${name}" -- systemctl --failed || true
+  waitInstanceBooted "${name}" || lxc exec "${name}" -- systemctl --failed || true
 
   # Create a snapshot so we can restore to this point.
   if [ "${SNAPSHOT_RESTORE}" = 1 ]; then
@@ -1454,3 +1471,52 @@ set_cluster_subnet() {
     lxc exec "${name}" -- ip addr add "${cluster_ip}" dev "${iface}"
   done
 }
+
+# waitInstanceReady: waits for the instance to be ready (processes count > 1).
+waitInstanceReady() (
+  { set +x; } 2>/dev/null
+  maxWait="${MAX_WAIT_SECONDS:-120}"
+  instName="${1}"
+
+  # Wait for the instance to report more than one process.
+  processes=0
+  for _ in $(seq "${maxWait}"); do
+      processes="$(lxc info "${instName}" | awk '{if ($1 == "Processes:") print $2}')"
+      if [ "${processes:-0}" -ge "${MIN_PROC_COUNT:-2}" ]; then
+          return 0 # Success.
+      fi
+      sleep 1
+  done
+
+  echo "Instance ${instName} not ready after ${maxWait}s"
+  return 1 # Failed.
+)
+
+# waitInstanceBooted: waits for the instance to be ready and fully booted.
+waitInstanceBooted() (
+  { set +x; } 2>/dev/null
+  prefix="${WARNING_PREFIX:-::warning::}"
+  maxWait=90
+  instName="$1"
+
+  # Wait for the instance to be ready
+  waitInstanceReady "${instName}"
+
+  # Then wait for the boot sequence to complete.
+  sleep 1
+  rc=0
+  state="$(lxc exec "${instName}" -- timeout "${maxWait}" systemctl is-system-running --wait)" || rc="$?"
+
+  # rc=124 is when `timeout` is hit.
+  # Other rc values are ignored as it doesn't matter if the system is fully
+  # operational (`running`) as it is booted.
+  if [ "${rc}" -eq 124 ]; then
+    echo "${prefix}Instance ${instName} not booted after ${maxWait}s"
+    lxc list "${instName}"
+    return 1 # Failed.
+  elif [ "${state}" != "running" ]; then
+    echo "${prefix}Instance ${instName} booted but not fully operational: ${state} != running"
+  fi
+
+  return 0 # Success.
+)

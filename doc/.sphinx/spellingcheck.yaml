@@ -2,7 +2,7 @@ matrix:
 - name: rST files
   aspell:
     lang: en
-    d: en_GB
+    d: en_US
   dictionary:
     wordlists:
     - .wordlist.txt
@@ -29,3 +29,4 @@ matrix:
       - img
       - a.p-navigation__link
       - a.contributor
+      - a[title]

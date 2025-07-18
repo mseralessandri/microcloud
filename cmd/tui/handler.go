@@ -1,17 +1,29 @@
 package tui
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 
-	"github.com/canonical/lxd/shared"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 // ContextError is the charmbracelet representation of a context cancellation error.
 var ContextError error = tea.ErrProgramKilled
+
+// InvalidInputError is used to indicate false input to an asked question.
+var InvalidInputError func(err error) = func(err error) {
+	errorMsg := "Invalid input, try again"
+
+	if err != nil {
+		PrintError(fmt.Sprintf("%s: %s", errorMsg, err.Error()))
+	} else {
+		PrintError(errorMsg)
+	}
+}
 
 // InputHandler handles input dialogs.
 type InputHandler struct {
@@ -21,8 +33,7 @@ type InputHandler struct {
 	// testMode is set to true if the handler is initialized in test mode with PrepareTestAsker.
 	testMode bool
 
-	table   *selectableTable
-	tableMu sync.Mutex
+	table *selectableTable
 
 	activeMu sync.RWMutex
 	active   bool
@@ -53,22 +64,47 @@ func (i *InputHandler) isActive() bool {
 	return i.active
 }
 
-// getAllRows lists all filtered and unflitered rows from the current table.
-func (i *InputHandler) getAllRows() [][]string {
-	i.tableMu.Lock()
-	defer i.tableMu.Unlock()
-
-	allRows := make([][]string, len(i.table.rawRows))
-	for i, row := range i.table.rawRows {
-		copy(allRows[i], row)
-	}
-
-	return allRows
+// countAllRows returns the number of all filtered and unflitered rows from the current table.
+func (i *InputHandler) countAllRows() int {
+	return i.table.countRawRows()
 }
 
-// AskBoolWarn is the same as AskBool but it appends "! Warning:" to the front of the message.
-func (i *InputHandler) AskBoolWarn(question string, defaultAnswer bool) (bool, error) {
-	question = fmt.Sprintf("%s %s: %s", WarningSymbol(), WarningColor("Warning", true), question)
+// formatQuestion enriches the plain question string with default and accepted answers.
+func (i *InputHandler) formatQuestion(question string, defaultAnswer string, acceptedAnswers []string) string {
+	var acceptedAnswersBlock string
+	if len(acceptedAnswers) > 0 {
+		acceptedAnswersBlock = Printf(Fmt{Arg: " (%s)"}, Fmt{Arg: strings.Join(acceptedAnswers, "/"), Bold: true})
+	}
+
+	var defaultAnswerBlock string
+	if defaultAnswer != "" {
+		defaultAnswerBlock = Printf(Fmt{Arg: " [%s]"}, Fmt{Arg: "default=" + defaultAnswer, Bold: true})
+	}
+
+	return fmt.Sprintf("%s%s%s: ", question, acceptedAnswersBlock, defaultAnswerBlock)
+}
+
+// Ask a question on the output stream and read the answer from the input stream.
+func (i *InputHandler) askQuestion(question, defaultAnswer string) (string, error) {
+	fmt.Print(question)
+
+	return i.readAnswer(defaultAnswer)
+}
+
+// Read the user's answer from the input stream, trimming newline and providing a default.
+func (i *InputHandler) readAnswer(defaultAnswer string) (string, error) {
+	answer, err := bufio.NewReader(i.input).ReadString('\n')
+	answer = strings.TrimSpace(strings.TrimSuffix(answer, "\n"))
+	if answer == "" {
+		answer = defaultAnswer
+	}
+
+	return answer, err
+}
+
+// AskBoolWarn is the same as AskBool but it prints the given warning before asking.
+func (i *InputHandler) AskBoolWarn(warning string, question string, defaultAnswer bool) (bool, error) {
+	PrintWarning(warning)
 	return i.AskBool(question, defaultAnswer)
 }
 
@@ -81,25 +117,25 @@ func (i *InputHandler) AskBool(question string, defaultAnswer bool) (bool, error
 		defaultAnswerStr = "yes"
 	}
 
-	result, err := i.handleQuestion(question, defaultAnswerStr, []string{"yes", "no"})
-	if err != nil {
-		return false, err
-	}
+	for {
+		answer, err := i.askQuestion(i.formatQuestion(question, defaultAnswerStr, []string{"yes", "no"}), defaultAnswerStr)
+		if err != nil {
+			return false, err
+		}
 
-	if shared.ValueInSlice(strings.ToLower(result.answer), []string{"yes", "y"}) {
-		fmt.Println(result.View())
-		return true, nil
-	} else if shared.ValueInSlice(strings.ToLower(result.answer), []string{"no", "n"}) {
-		fmt.Println(result.View())
-		return false, nil
-	}
+		if slices.Contains([]string{"yes", "y"}, strings.ToLower(answer)) {
+			return true, nil
+		} else if slices.Contains([]string{"no", "n"}, strings.ToLower(answer)) {
+			return false, nil
+		}
 
-	return false, fmt.Errorf("Response %q must be one of %v", result.answer, result.acceptedAnswers)
+		InvalidInputError(nil)
+	}
 }
 
-// AskStringWarn is the same as AskString but it appends "! Warning:" to the front of the message.
-func (i *InputHandler) AskStringWarn(question string, defaultAnswer string, validator func(string) error) (string, error) {
-	question = fmt.Sprintf("%s %s: %s", WarningSymbol(), WarningColor("Warning", true), question)
+// AskStringWarn is the same as AskString but it prints the given warning before asking.
+func (i *InputHandler) AskStringWarn(warning string, question string, defaultAnswer string, validator func(string) error) (string, error) {
+	PrintWarning(warning)
 	return i.AskString(question, defaultAnswer, validator)
 }
 
@@ -107,51 +143,27 @@ func (i *InputHandler) AskStringWarn(question string, defaultAnswer string, vali
 func (i *InputHandler) AskString(question string, defaultAnswer string, validator func(string) error) (string, error) {
 	i.setActive(true)
 	defer i.setActive(false)
-	result, err := i.handleQuestion(question, defaultAnswer, nil)
-	if err != nil {
-		return "", err
+
+	for {
+		answer, err := i.askQuestion(i.formatQuestion(question, defaultAnswer, nil), defaultAnswer)
+		if err != nil {
+			return "", err
+		}
+
+		if validator != nil {
+			err = validator(answer)
+			if err != nil {
+				InvalidInputError(err)
+				continue
+			}
+
+			return answer, err
+		}
+
+		if len(answer) != 0 {
+			return answer, err
+		}
+
+		InvalidInputError(nil)
 	}
-
-	err = validator(result.answer)
-	if err != nil {
-		return "", err
-	}
-
-	fmt.Println(result.View())
-
-	return result.answer, nil
-}
-
-func (i *InputHandler) handleQuestion(question string, defaultAnswer string, acceptedAnswers []string) (*asker, error) {
-	ask := &asker{
-		question:        question,
-		defaultAnswer:   defaultAnswer,
-		acceptedAnswers: acceptedAnswers,
-		File:            i.output,
-	}
-
-	// The standard renderer does not yet support custom cursor positions so we need to
-	// manually remove the sequence from the end of the string to get proper cursor tracking.
-	// see: https://github.com/charmbracelet/bubbletea/issues/918
-	out, err := tea.NewProgram(ask, tea.WithOutput(ask), tea.WithInput(i.input)).Run()
-	if err != nil {
-		return nil, err
-	}
-
-	result, ok := out.(*asker)
-	if !ok {
-		return nil, fmt.Errorf("Unexpected question result")
-	}
-
-	if result.cancelled {
-		return nil, fmt.Errorf("Input cancelled")
-	}
-
-	if strings.TrimSpace(result.answer) == "" {
-		result.answer = result.defaultAnswer
-	} else {
-		result.answer = strings.TrimSpace(result.answer)
-	}
-
-	return result, nil
 }

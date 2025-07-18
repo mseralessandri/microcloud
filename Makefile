@@ -1,4 +1,4 @@
-GOMIN=1.22.7
+GOMIN=1.24.4
 GOCOVERDIR ?= $(shell go env GOCOVERDIR)
 GOPATH ?= $(shell go env GOPATH)
 DQLITE_PATH=$(GOPATH)/deps/dqlite
@@ -66,7 +66,7 @@ check-system:
 .PHONY: check-static
 check-static:
 ifeq ($(shell command -v golangci-lint 2> /dev/null),)
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$HOME/go/bin
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$HOME/go/bin v2.1.6
 endif
 ifeq ($(shell command -v revive 2> /dev/null),)
 	go install github.com/mgechev/revive@latest
@@ -81,9 +81,13 @@ update-gomod:
 	go get -t -v -u ./...
 
 	# Static pins
-	go get github.com/canonical/lxd@stable-5.21 # Stay on v2 dqlite and LXD LTS client
+	go get github.com/canonical/lxd@8079534cf291bbc562aeffc26b671a03c322ae10 # Stay on v2 dqlite and specific LXD LTS client from stable-5.21 branch
+	go get github.com/olekukonko/tablewriter@v0.0.5 # Due to breaking API in later versions
 
 	go mod tidy -go=$(GOMIN)
+
+	# Use the bundled toolchain that meets the minimum go version
+	go get toolchain@none
 
 # Update lxd-generate generated database helpers.
 .PHONY: update-schema

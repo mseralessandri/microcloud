@@ -3,7 +3,7 @@ package client
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,12 +30,17 @@ type AuthConfig struct {
 func UseAuthProxy(c *client.Client, serviceType types.ServiceType, conf AuthConfig) (*client.Client, error) {
 	tp, ok := c.Transport.(*http.Transport)
 	if !ok {
-		return nil, fmt.Errorf("Invalid client transport type")
+		return nil, errors.New("Invalid client transport type")
 	}
 
 	// If the client is a unix client, it may not have any TLS config.
 	if tp.TLSClientConfig == nil {
 		tp.TLSClientConfig = &tls.Config{}
+	}
+
+	// Error out if no HMAC is provided and mTLS verification is disabled.
+	if conf.HMAC == "" && conf.InsecureSkipVerify {
+		return nil, errors.New("Cannot disable mTLS verification without providing an HMAC")
 	}
 
 	tp.TLSClientConfig.InsecureSkipVerify = conf.InsecureSkipVerify
@@ -57,7 +62,7 @@ func AuthProxy(hmac string, serviceType types.ServiceType) func(r *http.Request)
 
 		// MicroCloud itself doesn't need to use the proxy.
 		if serviceType != types.MicroCloud {
-			path := fmt.Sprintf("/1.0/services/%s", strings.ToLower(string(serviceType)))
+			path := "/1.0/services/" + strings.ToLower(string(serviceType))
 			if !strings.HasPrefix(r.URL.Path, path) {
 				r.URL.Path = path + r.URL.Path
 			}
