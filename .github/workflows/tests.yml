@@ -31,6 +31,7 @@ defaults:
 
 jobs:
   changes:
+    if: ${{ github.repository == 'canonical/microcloud' }}
     name: Changes
     runs-on: ubuntu-24.04
     outputs:
@@ -48,10 +49,10 @@ jobs:
           glob: ":!doc/*"
 
   code-tests:
+    if: ${{ (needs.changes.outputs.except_docs == 'true' || github.event_name == 'schedule') && github.repository == 'canonical/microcloud' }}
     name: Code
     runs-on: ubuntu-22.04
     needs: [changes]
-    if: ${{ needs.changes.outputs.except_docs == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -79,7 +80,7 @@ jobs:
 
       - id: ShellCheck
         name: Differential ShellCheck
-        uses: redhat-plumbers-in-action/differential-shellcheck@929381c602ed76daa9b523e001ee29b82bd6d8e9 # v5.5.4
+        uses: redhat-plumbers-in-action/differential-shellcheck@0d9e5b29625f871e6a4215380486d6f1a7cb6cdd # v5.5.5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           strict-check-on-push: true
@@ -139,6 +140,7 @@ jobs:
       DEBUG: "1"
       SKIP_VM_LAUNCH: "1"
       SNAPSHOT_RESTORE: "1"
+    if: ${{ github.repository == 'canonical/microcloud' }}
     name: System (core)
     runs-on: ubuntu-22.04
     needs: code-tests
@@ -186,6 +188,7 @@ jobs:
       DEBUG: "1"
       SKIP_VM_LAUNCH: "1"
       SNAPSHOT_RESTORE: "1"
+    if: ${{ github.repository == 'canonical/microcloud' }}
     name: System (upgrade)
     runs-on: ubuntu-22.04
     needs: code-tests
@@ -214,11 +217,11 @@ jobs:
       DEBUG: "1"
       SKIP_VM_LAUNCH: "1"
       SNAPSHOT_RESTORE: "1"
+    # Run the tests on the Canonical runners only when scheduled.
+    if: ${{ github.event_name == 'schedule' && github.repository == 'canonical/microcloud' }}
     name: System (Canonical)
     runs-on: self-hosted-linux-amd64-jammy-large
     needs: code-tests
-    # Run the tests on the Canonical runners only when scheduled.
-    if: ${{ github.event_name == 'schedule' }}
     strategy:
       fail-fast: false
       matrix:
@@ -254,7 +257,7 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
-          go-version: 1.23.x
+          go-version-file: 'go.mod'
 
       - name: Download coverage data
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
