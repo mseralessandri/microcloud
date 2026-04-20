@@ -99,6 +99,7 @@ exclude_patterns = [
     'Thumbs.db',
     '.DS_Store',
     '.sphinx',
+    'reference/release-notes/release-notes-template.md',
 ]
 exclude_patterns.extend(custom_excludes)
 
@@ -118,7 +119,8 @@ if not 'conf_py_path' in html_context and 'github_folder' in html_context:
 
 # For ignoring specific links
 linkcheck_anchors_ignore_for_url = [
-    r'https://github\.com/.*'
+    r'https://github\.com/.*',
+    r'https://charmhub\.io/.*',
 ]
 linkcheck_anchors_ignore_for_url.extend(custom_linkcheck_anchors_ignore_for_url)
 
@@ -160,7 +162,9 @@ if html_title == '':
 ### Additional files
 ############################################################
 
-html_static_path = ['.sphinx/_static']
+html_extra_path = ['_extra']
+
+html_static_path = ['.sphinx/_static', '_static']
 if 'custom_html_static_path' in globals():
     html_static_path = html_static_path + custom_html_static_path
 

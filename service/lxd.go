@@ -23,6 +23,9 @@ import (
 	"github.com/canonical/microcloud/microcloud/version"
 )
 
+// LXDInitializationTimeout is the time limit for LXD initialization for microcloud.
+const LXDInitializationTimeout time.Duration = 1 * time.Minute
+
 // LXDService is a LXD service.
 type LXDService struct {
 	m *microcluster.MicroCluster
@@ -57,7 +60,7 @@ func (s LXDService) Client(ctx context.Context) (lxd.InstanceServer, error) {
 	}
 
 	return lxd.ConnectLXDUnixWithContext(ctx, s.m.FileSystem.ControlSocket().Host, &lxd.ConnectionArgs{
-		HTTPClient:    c.Client.Client,
+		HTTPClient:    c.HTTP(),
 		SkipGetServer: true,
 		Proxy:         cloudClient.AuthProxy("", types.LXD),
 	})
@@ -91,7 +94,7 @@ func (s LXDService) remoteClient(cert *x509.Certificate, address string, port in
 
 	remoteURL := c.URL()
 	client, err := lxd.ConnectLXD(remoteURL.String(), &lxd.ConnectionArgs{
-		HTTPClient:    c.Client.Client,
+		HTTPClient:    c.HTTP(),
 		TLSClientCert: string(serverCert.PublicKey()),
 		TLSClientKey:  string(serverCert.PrivateKey()),
 		TLSServerCert: microTypes.X509Certificate{Certificate: cert}.String(),
@@ -220,6 +223,16 @@ func (s LXDService) Join(ctx context.Context, joinConfig JoinConfig) error {
 		return fmt.Errorf("Failed to update server configuration: %w", err)
 	}
 
+	// Check if the daemon is ready before returning.
+	// This is to ensure it already responds to heartbeats after joining the cluster.
+	ctx, cancel := context.WithTimeout(ctx, LXDInitializationTimeout)
+	defer cancel()
+
+	err = s.WaitReady(ctx, client, false, false)
+	if err != nil {
+		return fmt.Errorf("Failed to check if LXD member is ready after join: %w", err)
+	}
+
 	return nil
 }
 
@@ -290,6 +303,29 @@ func (s LXDService) DeleteToken(ctx context.Context, tokenName string, address s
 	}
 
 	return fmt.Errorf("No corresponding join token operation found for %q", tokenName)
+}
+
+// Metrics fetches the metrics from the LXD daemon at the given address with a remote client.
+func (s LXDService) Metrics(ctx context.Context, address string) (string, error) {
+	var c lxd.InstanceServer
+	var err error
+	if address != "" {
+		c, err = s.remoteClient(nil, address, CloudPort)
+	} else {
+		c, err = s.Client(ctx)
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	// Get the cluster member metrics.
+	metrics, err := c.GetMetrics()
+	if err != nil {
+		return "", err
+	}
+
+	return metrics, nil
 }
 
 // RemoteClusterMembers returns a map of cluster member names and addresses from the MicroCloud at the given address.

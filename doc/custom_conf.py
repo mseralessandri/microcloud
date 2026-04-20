@@ -1,7 +1,9 @@
 import datetime
 import os
+import re
 import yaml
 from redirects import redirects
+from git import Repo, InvalidGitRepositoryError
 
 # Custom configuration for the Sphinx documentation builder.
 # All configuration specific to your project should be done in this file.
@@ -25,10 +27,13 @@ from redirects import redirects
 project = 'MicroCloud'
 author = 'Canonical Group Ltd'
 
-# The title you want to display for the documentation in the sidebar.
-# You might want to include a version number here.
-# To not display any title, set this option to an empty string.
-html_title = ''
+with open('../version/version.go') as f:
+    match = re.search(r'RawVersion = "([^"]+)"', f.read())
+    version = match.group(1) if match else ''
+
+# Sidebar documentation title; best kept reasonably short
+# To disable the title, set to an empty string.
+html_title = project + ' documentation ' + version
 
 # The default value uses the current year as the copyright year.
 #
@@ -138,7 +143,7 @@ html_baseurl = 'https://documentation.ubuntu.com/microcloud/'
 # based on the version if built in RTD
 if 'READTHEDOCS_VERSION' in os.environ:
     rtd_version = os.environ["READTHEDOCS_VERSION"]
-    sitemap_url_scheme = f'{rtd_version}/microcloud/{{link}}'
+    sitemap_url_scheme = f'{rtd_version}/{{link}}'
 else:
     sitemap_url_scheme = '{link}'
 
@@ -165,7 +170,9 @@ linkcheck_ignore = [
     # These links may fail from time to time
     'https://ceph.io',
     # Cloudflare protection on SourceForge domains often block linkcheck
-    r"https://.*\.sourceforge\.net/.*",
+    r"https://.*\.sourceforge\.(net|io)/.*",
+    # Ignore so that we can link change log in release notes before a release is ready
+    r"https://github\.com/canonical/microcloud/compare.*",
     ]
 
 # Pages on which to ignore anchors
@@ -232,14 +239,16 @@ custom_excludes = [
     'README.md'
     ]
 
-# Add CSS files (located in .sphinx/_static/)
+# Add CSS files (located in .sphinx/_static/ or from external link)
 custom_html_css_files = [
-    'cookie-banner.css',
+    'https://assets.ubuntu.com/v1/d86746ef-cookie_banner.css',
 ]
 
-# Add JavaScript files (located in .sphinx/_static/)
+# Add JavaScript files (located in .sphinx/_static/ or from external link)
 custom_html_js_files = [
-    'js/bundle.js',]
+    'https://assets.ubuntu.com/v1/287a5e8f-bundle.js',
+    'rtd-versions-flyout.js',
+]
 
 ## The following settings override the default configuration.
 
@@ -271,22 +280,28 @@ if ('SINGLE_BUILD' in os.environ and os.environ['SINGLE_BUILD'] == 'True'):
         'lxd': ('https://documentation.ubuntu.com/lxd/latest/', None),
         'microceph': ('https://canonical-microceph.readthedocs-hosted.com/en/latest/', None),
         'microovn': ('https://canonical-microovn.readthedocs-hosted.com/en/latest/', None),
-        'ceph': ('https://docs.ceph.com/en/latest/', None),
     }
 elif ('READTHEDOCS' in os.environ) and (os.environ['READTHEDOCS'] == 'True'):
     intersphinx_mapping = {
         'lxd': (os.environ['PATH_PREFIX'] + 'lxd/', os.environ['READTHEDOCS_OUTPUT'] + 'html/lxd/objects.inv'),
         'microceph': (os.environ['PATH_PREFIX'] + 'microceph/', os.environ['READTHEDOCS_OUTPUT'] + 'html/microceph/objects.inv'),
         'microovn': (os.environ['PATH_PREFIX'] + 'microovn/', os.environ['READTHEDOCS_OUTPUT'] + 'html/microovn/objects.inv'),
-        'ceph': ('https://docs.ceph.com/en/latest/', None)
     }
 else:
     intersphinx_mapping = {
         'lxd': ('/lxd/', '_build/lxd/objects.inv'),
         'microceph': ('/microceph/', '_build/microceph/objects.inv'),
         'microovn': ('/microovn/', '_build/microovn/objects.inv'),
-        'ceph': ('https://docs.ceph.com/en/latest/', None)
     }
+
+# Add intersphinx mappings for docs sets not part of the MicroCloud integrated docs here:
+
+base_intersphinx = {
+    'ceph': ('https://docs.ceph.com/en/latest/', None),
+    'snap': ('https://snapcraft.io/docs/', None),
+}
+
+intersphinx_mapping.update(base_intersphinx)
 
 # Define a :center: role that can be used to center the content of table cells.
 rst_prolog = '''
@@ -296,12 +311,48 @@ rst_prolog = '''
 
 if not ('SINGLE_BUILD' in os.environ and os.environ['SINGLE_BUILD'] == 'True'):
     exec(compile(source=open('.sphinx/_integration/add_config.py').read(), filename='.sphinx/_integration/add_config.py', mode='exec'))
+    # MicroCloud docs are at the URL root, so override the relative paths to sibling doc sets
+    html_context['lxd_path'] = "lxd"
+    html_context['lxd_tag'] = "lxd/_static/tag.png"
+    html_context['microceph_path'] = "microceph"
+    html_context['microceph_tag'] = "microceph/_static/tag.png"
+    html_context['microovn_path'] = "microovn"
+    html_context['microovn_tag'] = "microovn/_static/microovn.png"
     custom_html_static_path = ['integration/microcloud/_static']
     custom_templates_path = ['integration/microcloud/_templates']
-    redirects['../index'] = 'microcloud/'
     custom_tags.append('integrated')
 
 # Load substitutions from YAML file
 if os.path.exists('./substitutions.yaml'):
     with open('./substitutions.yaml', 'r') as fd:
         myst_substitutions = yaml.safe_load(fd.read())
+
+# Version label shown in the RTD flyout next to "default", in parentheses.
+# Set the FLYOUT_DEFAULT_VERSION_LABEL environment variable in the RTD project dashboard.
+html_context['flyout_default_version_label'] = os.environ.get('FLYOUT_DEFAULT_VERSION_LABEL', '')
+
+# SwaggerUI configuration
+
+if os.environ.get('READTHEDOCS'):
+    swagger_url_scheme = '/microcloud/latest/api/#{{path}}'
+else:
+    swagger_url_scheme = '/api/#{{path}}'
+
+myst_url_schemes = {
+    'http': None,
+    'https': None,
+    'swagger': swagger_url_scheme,
+}
+
+# Download and link swagger-ui files
+if not os.path.isdir('.sphinx/deps/swagger-ui'):
+    Repo.clone_from('https://github.com/swagger-api/swagger-ui', '.sphinx/deps/swagger-ui', depth=1)
+
+os.makedirs('_static/swagger-ui/', exist_ok=True)
+
+if not os.path.islink('_static/swagger-ui/swagger-ui-bundle.js'):
+    os.symlink('../../.sphinx/deps/swagger-ui/dist/swagger-ui-bundle.js', '_static/swagger-ui/swagger-ui-bundle.js')
+if not os.path.islink('_static/swagger-ui/swagger-ui-standalone-preset.js'):
+    os.symlink('../../.sphinx/deps/swagger-ui/dist/swagger-ui-standalone-preset.js', '_static/swagger-ui/swagger-ui-standalone-preset.js')
+if not os.path.islink('_static/swagger-ui/swagger-ui.css'):
+    os.symlink('../../.sphinx/deps/swagger-ui/dist/swagger-ui.css', '_static/swagger-ui/swagger-ui.css')

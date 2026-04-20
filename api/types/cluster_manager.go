@@ -63,19 +63,34 @@ type StatusDistribution struct {
 	Count  int64  `json:"count"`
 }
 
+// StoragePoolUsage represents the storage usage distribution.
+type StoragePoolUsage struct {
+	Name   string `json:"name"`
+	Member string `json:"member"`
+	Total  uint64 `json:"total"`
+	Usage  uint64 `json:"usage"`
+}
+
+// ServerMetrics represents the metrics from one cluster member service.
+type ServerMetrics struct {
+	Member  string      `json:"member"`
+	Metrics string      `json:"metrics"`
+	Service ServiceType `json:"service"`
+}
+
 // ClusterManagerPostStatus represents the periodic status payload sent to cluster manager.
 type ClusterManagerPostStatus struct {
+	CephStatuses      []StatusDistribution `json:"ceph_statuses"`
 	CPUTotalCount     int64                `json:"cpu_total_count"`
 	CPULoad1          string               `json:"cpu_load_1"`
 	CPULoad5          string               `json:"cpu_load_5"`
 	CPULoad15         string               `json:"cpu_load_15"`
 	MemoryTotalAmount int64                `json:"memory_total_amount"`
 	MemoryUsage       int64                `json:"memory_usage"`
-	DiskTotalSize     int64                `json:"disk_total_size"`
-	DiskUsage         int64                `json:"disk_usage"`
+	StoragePoolUsages []StoragePoolUsage   `json:"storage_pool_usages"`
 	MemberStatuses    []StatusDistribution `json:"member_statuses"`
 	InstanceStatuses  []StatusDistribution `json:"instance_statuses"`
-	Metrics           string               `json:"metrics"`
+	ServerMetrics     []ServerMetrics      `json:"server_metrics"`
 	UIURL             string               `json:"ui_url"`
 }
 
